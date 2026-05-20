@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CH32V003 Teplotni Krivka</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;min-height:100vh;display:grid;grid-template-columns:1fr 360px;gap:1px}
+        @media(max-width:900px){body{grid-template-columns:1fr}}
+        .panel{background:#1e293b;padding:20px;display:flex;flex-direction:column;gap:16px}
+        .header{display:flex;justify-content:space-between;align-items:center}
+        .header h1{font-size:1.25rem;color:#38bdf8}
+        .btn{padding:8px 16px;border:none;border-radius:6px;background:#0f172a;color:#f8fafc;cursor:pointer;font-size:.875rem}
+        .btn:hover{background:#334155}
+        .btn.primary{background:#38bdf8;color:#0f172a}
+        .btn.primary:hover{background:#0ea5e9}
+        .canvas-wrap{height:35vh;min-height:280px;background:#0f172a;border-radius:8px;position:relative}
+        canvas{width:100%;height:100%;cursor:crosshair}
+        .hint{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);font-size:.75rem;color:#64748b}
+        .data-table{flex:1;overflow:auto;background:#0f172a;border-radius:8px;padding:12px}
+        table{width:100%;font-size:.875rem;border-collapse:collapse}
+        th,td{padding:6px 10px;text-align:right}
+        th{color:#64748b;position:sticky;top:0;background:#0f172a}
+        tr:hover td{background:#1e293b}
+        
+        .controls{gap:20px;display:flex;flex-direction:column;overflow-y:auto}
+        .section h3{font-size:.75rem;color:#64748b;text-transform:uppercase;margin-bottom:12px}
+        .range{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
+        input[type="number"]{padding:8px 10px;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#f8fafc;width:100%}
+        input[type="number"]:focus{outline:none;border-color:#38bdf8}
+        .points{display:flex;flex-direction:column;gap:8px}
+        .point{background:#0f172a;border-radius:8px;padding:12px;border:2px solid transparent;transition:all .2s}
+        .point:hover{border-color:#334155}
+        .point.active{border-color:#38bdf8;background:rgba(56,189,248,.1)}
+        .point-header{display:flex;justify-content:space-between;margin-bottom:8px;font-size:.875rem;font-weight:600}
+        .point-remove{color:#64748b;cursor:pointer;padding:2px 6px;border-radius:4px}
+        .point-remove:hover{color:#ef4444;background:rgba(239,68,68,.1)}
+        .point-inputs{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .point-inputs input{text-align:center;font-size:.875rem}
+        .seg{margin-top:8px;padding-top:8px;border-top:1px solid #334155}
+        .seg label{display:block;font-size:.75rem;color:#64748b;margin-bottom:4px}
+        .seg select{width:100%;padding:6px 8px;border:1px solid #334155;border-radius:4px;background:#1e293b;color:#f8fafc}
+        .slider{display:flex;gap:12px;align-items:center}
+        .slider input[type="range"]{flex:1;accent-color:#38bdf8}
+        .slider span{min-width:40px;text-align:right;color:#38bdf8;font-size:.875rem}
+        .code{background:#0f172a;border-radius:8px;padding:12px;font-family:monospace;font-size:.75rem;max-height:250px;overflow:auto;white-space:pre;color:#94a3b8}
+        .stats{display:flex;gap:20px;font-size:.75rem;color:#64748b}
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <div class="header">
+            <h1>Teplotni Krivka</h1>
+            <div>
+                <button class="btn" onclick="app.reset()">Reset</button>
+                <button class="btn primary" onclick="app.exportCSV()">CSV</button>
+                <button class="btn primary" onclick="app.exportC()">C kod</button>
+            </div>
+        </div>
+        <div class="canvas-wrap">
+            <canvas id="c"></canvas>
+            <div class="hint">Klikni = pridat bod | Chytni = presunout | 2x klik = smazat</div>
+        </div>
+        <div class="data-table">
+            <table>
+                <thead><tr><th>Teplota</th><th>Vystup %</th><th>ADC</th></tr></thead>
+                <tbody id="tb"></tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div class="panel controls">
+        <div class="section">
+            <h3>Teplotni rozsah</h3>
+            <div class="range">
+                <input type="number" id="tmin" value="-25" onchange="app.setRange()">
+                <span>→</span>
+                <input type="number" id="tmax" value="125" onchange="app.setRange()">
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>Kontrolni body</h3>
+            <div class="points" id="plist"></div>
+            <button class="btn primary" style="width:100%;margin-top:8px" onclick="app.addPoint()">+ Pridat bod</button>
+        </div>
+        
+        <div class="section">
+            <h3>Minimalni vystup</h3>
+            <div class="slider">
+                <input type="range" id="omin" min="0" max="50" value="0" oninput="app.setMin(this.value)">
+                <span id="omval">0%</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>C kod</h3>
+            <div class="code" id="code">// Klikni na "C kod" pro generovani</div>
+        </div>
+        
+        <div class="stats">
+            <span>Bodu: <strong id="pc">0</strong></span>
+            <span>Segmentu: <strong id="sc">0</strong></span>
+        </div>
+    </div>
+
+<script>
+const C={ADC:4095,PAD:{t:40,r:40,b:60,l:70},PR:8,HR:12,GC:'#334155',CC:'#38bdf8',PC:'#f8fafc',AC:'#38bdf8'};
+const T={lin:'Linearni',exp:'Exponencialni',log:'Logaritmicky',smo:'Plynuly'};
+
+class App{
+constructor(){
+this.c=document.getElementById('c');
+this.x=this.c.getContext('2d');
+// Vychozi body: -25/100 -> 75/100 -> 84/70 -> 100/0 -> 125/0
+this.p=[
+{id:1,t:-25,o:100},
+{id:2,t:75,o:100},
+{id:3,t:84,o:70},
+{id:4,t:100,o:0},
+{id:5,t:125,o:0}
+];
+// Segmenty: 1=lin, 2=smo, 3=smo, 4=lin
+this.s=[
+{f:this.p[0],t:this.p[1],ty:'lin',k:0.0921},
+{f:this.p[1],t:this.p[2],ty:'smo',k:0.0921},
+{f:this.p[2],t:this.p[3],ty:'smo',k:0.0921},
+{f:this.p[3],t:this.p[4],ty:'lin',k:0.0921}
+];
+this.drag=null;
+this.sel=null;
+this.hover=null;
+this.tmin=-25;this.tmax=125;this.omin=0;
+this.editing=null;
+this.resize();
+this.updT();
+this.bind();
+this.draw();
+}
+
+resize(){
+const r=this.c.parentElement.getBoundingClientRect();
+this.c.width=r.width*devicePixelRatio;
+this.c.height=r.height*devicePixelRatio;
+this.x.scale(devicePixelRatio,devicePixelRatio);
+this.w=r.width;this.h=r.height;
+}
+
+updS(){
+// Uložit staré segmenty s jejich typy podle ID párů bodů
+const oldTypes=new Map();
+for(const seg of this.s){
+const key=`${seg.f.id}-${seg.t.id}`;
+oldTypes.set(key,{ty:seg.ty,k:seg.k});
+}
+
+// Vytvořit nové segmenty s zachováním typů
+this.s=[];
+for(let i=0;i<this.p.length-1;i++){
+const a=this.p[i],b=this.p[i+1];
+const key=`${a.id}-${b.id}`;
+const old=oldTypes.get(key);
+this.s.push({f:a,t:b,ty:old?old.ty:'lin',k:old?old.k:0.0921});
+}
+
+document.getElementById('pc').textContent=this.p.length;
+document.getElementById('sc').textContent=this.s.length;
+this.updT();
+}
+
+// Vykresleni
+grid(){
+const{PAD:{t,r,b,l}}=C,gw=this.w-l-r,gh=this.h-t-b;
+this.x.strokeStyle=C.GC;this.x.lineWidth=1;
+this.x.font='12px system-ui';this.x.fillStyle='#64748b';
+
+// Mrizka po 10 stupnich pro cely rozsah
+for(let te=Math.ceil(this.tmin/10)*10;te<=this.tmax;te+=10){
+if(te<this.tmin||te>this.tmax)continue;
+const px=this.t2px(te);
+this.x.beginPath();this.x.moveTo(px,t);this.x.lineTo(px,t+gh);this.x.stroke();
+// Popisky pro 25-nasobky + vsechny v rozsahu 50-100
+if(te%25===0||(te>=50&&te<=100)){
+this.x.textAlign='center';this.x.fillStyle='#64748b';this.x.font='12px system-ui';
+this.x.fillText(te+'°',px,t+gh+20);
+}
+}
+
+for(let o=0;o<=100;o+=20){
+const py=t+gh-(o/100)*gh;
+this.x.beginPath();this.x.moveTo(l,py);this.x.lineTo(l+gw,py);this.x.stroke();
+this.x.textAlign='right';this.x.fillText(o+'%',l-10,py+4);
+}
+
+this.x.strokeStyle='#64748b';this.x.lineWidth=2;
+this.x.beginPath();this.x.moveTo(l,t);this.x.lineTo(l,t+gh);this.x.lineTo(l+gw,t+gh);this.x.stroke();
+}
+
+// 3-segmentova skala: -25-50 (20%), 50-100 (60%), 100-125 (20%)
+t2px(te){
+const{PAD:{l,r}}=C,gw=this.w-l-r;
+if(te<=50){
+// Zhusteny rozsah -25 az 50: 20% prostoru
+const p=(te-this.tmin)/(50-this.tmin);
+return l+p*0.2*gw;
+}else if(te<=100){
+// Roztazeny rozsah 50 az 100: 60% prostoru
+const p=(te-50)/(100-50);
+return l+0.2*gw+p*0.6*gw;
+}else{
+// Zhusteny rozsah 100 az 125: 20% prostoru
+const p=(te-100)/(this.tmax-100);
+return l+0.8*gw+p*0.2*gw;
+}}
+
+// Inverzni prevod pro kliknuti
+px2t(px){
+const{PAD:{l,r}}=C,gw=this.w-l-r,gp=px-l;
+if(gp<=0.2*gw){
+// Zhusteny rozsah -25 az 50
+return this.tmin+(gp/(0.2*gw))*(50-this.tmin);
+}else if(gp<=0.8*gw){
+// Roztazeny rozsah 50 az 100
+return 50+((gp-0.2*gw)/(0.6*gw))*(100-50);
+}else{
+// Zhusteny rozsah 100 az 125
+return 100+((gp-0.8*gw)/(0.2*gw))*(this.tmax-100);
+}}
+
+calc(te){
+if(te<this.p[0].t)return this.p[0].o;
+if(te>this.p[this.p.length-1].t)return this.p[this.p.length-1].o;
+for(const s of this.s){
+if(te>=s.f.t&&te<=s.t.t){
+const p=(te-s.f.t)/(s.t.t-s.f.t);
+if(s.ty==='exp'){const dt=s.t.t-s.f.t,td=te-s.f.t,e1=Math.exp(-s.k*td),e2=Math.exp(-s.k*dt);return s.t.o+(s.f.o-s.t.o)*(e1-e2)/(1-e2);}
+if(s.ty==='log')return s.f.o+(Math.log(1+p)/Math.log(2))*(s.t.o-s.f.o);
+if(s.ty==='smo'){const sp=p*p*(3-2*p);return s.f.o+sp*(s.t.o-s.f.o);}
+return s.f.o+p*(s.t.o-s.f.o);
+}}
+return this.omin;
+}
+
+curve(){
+const{PAD:{t,r,b,l}}=C,gw=this.w-l-r,gh=this.h-t-b;
+this.x.strokeStyle=C.CC;this.x.lineWidth=3;this.x.beginPath();
+for(let px=0;px<=gw;px+=2){
+const te=this.px2t(l+px);
+const o=this.calc(te);
+const py=t+gh-(o/100)*gh;
+px===0?this.x.moveTo(l+px,py):this.x.lineTo(l+px,py);
+}
+this.x.stroke();
+}
+
+pts(){
+const{PAD:{t,r,b,l}}=C,gw=this.w-l-r,gh=this.h-t-b;
+for(const p of this.p){
+const px=this.t2px(p.t);
+const py=t+gh-(p.o/100)*gh;
+const isH=this.hover===p,isS=this.sel===p;
+const rad=isH?C.HR:C.PR;
+
+this.x.beginPath();this.x.arc(px,py,rad,0,Math.PI*2);
+this.x.fillStyle=isS?C.AC:C.PC;this.x.fill();
+this.x.strokeStyle=isS?C.PC:C.CC;this.x.lineWidth=2;this.x.stroke();
+}
+}
+
+draw(){
+this.x.clearRect(0,0,this.w,this.h);
+this.grid();this.curve();this.pts();
+}
+
+// Interakce
+bind(){
+const c=this.c;
+c.addEventListener('mousedown',e=>this.md(e));
+c.addEventListener('mousemove',e=>this.mm(e));
+c.addEventListener('mouseup',()=>this.mu());
+c.addEventListener('mouseleave',()=>this.mu());
+c.addEventListener('click',e=>this.cl(e));
+c.addEventListener('dblclick',e=>this.dc(e));
+window.addEventListener('resize',()=>{this.resize();this.draw();});
+}
+
+mp(e){
+const r=this.c.getBoundingClientRect();
+return{x:e.clientX-r.left,y:e.clientY-r.top};
+}
+
+getP(x,y){
+const{PAD:{t,l}}=C,gw=this.w-l-C.PAD.r,gh=this.h-t-C.PAD.b;
+for(const p of this.p){
+const px=this.t2px(p.t);
+const py=t+gh-(p.o/100)*gh;
+if(Math.hypot(x-px,y-py)<C.HR*1.5)return p;
+}
+return null;
+}
+
+md(e){
+if(this.editing)return;
+const m=this.mp(e);
+const p=this.getP(m.x,m.y);
+if(p){
+this.drag=p;this.sel=p;this.c.style.cursor='grabbing';
+this.renderP();
+}
+}
+
+mm(e){
+if(this.drag){
+const m=this.mp(e);
+const{PAD:{t,l}}=C,gh=this.h-t-C.PAD.b;
+let te=this.px2t(m.x);
+let o=((t+gh-m.y)/gh)*100;
+te=Math.max(this.tmin,Math.min(this.tmax,te));
+o=Math.max(0,Math.min(100,o));
+this.drag.t=te;this.drag.o=o;
+this.p.sort((a,b)=>a.t-b.t);
+this.updS();this.draw();this.renderP();
+}else{
+const m=this.mp(e);
+const p=this.getP(m.x,m.y);
+if(p!==this.hover){this.hover=p;this.c.style.cursor=p?'grab':'crosshair';this.draw();}
+}
+}
+
+mu(){
+if(this.drag){this.drag=null;this.c.style.cursor=this.hover?'grab':'crosshair';}
+}
+
+cl(e){
+if(this.editing||this.drag)return;
+const m=this.mp(e);
+const p=this.getP(m.x,m.y);
+if(!p){
+const{PAD:{t,l}}=C,gh=this.h-t-C.PAD.b;
+let te=this.px2t(m.x);
+let o=((t+gh-m.y)/gh)*100;
+const np={id:Date.now(),t:Math.max(this.tmin,Math.min(this.tmax,te)),o:Math.max(0,Math.min(100,o))};
+this.p.push(np);this.p.sort((a,b)=>a.t-b.t);
+this.sel=np;this.updS();this.draw();this.renderP();
+}
+}
+
+dc(e){
+if(this.editing)return;
+const m=this.mp(e);
+const p=this.getP(m.x,m.y);
+// Dvojklik na bod = smazat bod
+if(p&&this.p.length>2){
+this.p=this.p.filter(x=>x.id!==p.id);
+if(this.sel===p)this.sel=null;
+this.updS();this.draw();this.renderP();
+}
+// Dvojklik na prazdnou plochu = nic (pridani je na jeden klik)
+}
+
+// UI
+renderP(){
+const c=document.getElementById('plist');
+c.innerHTML='';
+this.p.forEach((p,i)=>{
+const d=document.createElement('div');
+d.className='point'+(this.sel===p?' active':'');
+d.dataset.id=p.id;
+
+const s=this.s[i];
+const seg=s?`<div class="seg"><label>Segment ${i+1}</label><select onchange="app.setSeg(${i},this.value)">${Object.entries(T).map(([k,v])=>`<option value="${k}" ${s.ty===k?'selected':''}>${v}</option>`).join('')}</select></div>`:'';
+
+d.innerHTML=`<div class="point-header"><span>Bod ${i+1}</span>${this.p.length>2?`<span class="point-remove" onclick="app.delP(${p.id})">×</span>`:''}</div><div class="point-inputs"><input type="number" value="${p.t.toFixed(1)}" step="0.1" data-f="t" onfocus="app.setEdit(${p.id})" onchange="app.updP(${p.id},'t',this.value)" onblur="app.endEdit()"><input type="number" value="${p.o.toFixed(1)}" step="0.1" min="0" max="100" data-f="o" onfocus="app.setEdit(${p.id})" onchange="app.updP(${p.id},'o',this.value)" onblur="app.endEdit()"></div>${seg}`;
+
+d.onclick=e=>{if(e.target.tagName!=='INPUT'&&e.target.tagName!=='SELECT'){this.sel=p;this.renderP();this.draw();}};
+c.appendChild(d);
+});
+}
+
+setEdit(id){this.editing=id;}
+endEdit(){setTimeout(()=>{if(!document.querySelector('.point input:focus'))this.editing=null;},100);}
+
+updP(id,f,v){
+const p=this.p.find(x=>x.id===id);
+if(!p)return;
+const old=p[f];
+p[f]=parseFloat(v);
+if(f==='t'&&Math.abs(old-p[f])>0.01){
+this.p.sort((a,b)=>a.t-b.t);
+this.updS();this.draw();this.renderP();
+}else{
+this.updS();this.draw();
+}
+this.updT();
+}
+
+delP(id){
+if(this.p.length<=2)return;
+this.p=this.p.filter(x=>x.id!==id);
+if(this.sel&&this.sel.id===id)this.sel=null;
+this.updS();this.draw();this.renderP();
+}
+
+setSeg(i,ty){if(this.s[i]){this.s[i].ty=ty;this.draw();this.updT();}}
+
+updT(){
+const b=document.getElementById('tb');
+b.innerHTML='';
+for(let t=this.tmin;t<=this.tmax;t+=5){
+const o=this.calc(t),adc=Math.round(o*C.ADC/100);
+const r=b.insertRow();
+r.insertCell(0).textContent=t.toFixed(0);
+r.insertCell(1).textContent=o.toFixed(1);
+r.insertCell(2).textContent=adc;
+}
+}
+
+setRange(){
+this.tmin=parseFloat(document.getElementById('tmin').value);
+this.tmax=parseFloat(document.getElementById('tmax').value);
+this.draw();this.updT();
+}
+
+setMin(v){
+this.omin=parseFloat(v);
+document.getElementById('omval').textContent=v+'%';
+this.draw();this.updT();
+}
+
+reset(){
+// Stejne vychozi body jako v constructoru
+this.p=[
+{id:1,t:-25,o:100},
+{id:2,t:75,o:100},
+{id:3,t:84,o:70},
+{id:4,t:100,o:0},
+{id:5,t:125,o:0}
+];
+this.s=[
+{f:this.p[0],t:this.p[1],ty:'lin',k:0.0921},
+{f:this.p[1],t:this.p[2],ty:'smo',k:0.0921},
+{f:this.p[2],t:this.p[3],ty:'smo',k:0.0921},
+{f:this.p[3],t:this.p[4],ty:'lin',k:0.0921}
+];
+this.omin=0;
+document.getElementById('omin').value=0;
+document.getElementById('omval').textContent='0%';
+this.updT();this.draw();this.renderP();
+}
+
+addPoint(){
+const te=this.tmin+(this.tmax-this.tmin)/2;
+const o=this.calc(te);
+const np={id:Date.now(),t:te,o:o};
+this.p.push(np);
+this.p.sort((a,b)=>a.t-b.t);
+this.sel=np;
+this.updS();this.draw();this.renderP();
+}
+
+exportCSV(){
+let csv='Temperature_C,Output_Percent,ADC_Value\n';
+for(let t=this.tmin;t<=this.tmax;t++){
+const o=this.calc(t),adc=Math.round(o*C.ADC/100);
+csv+=`${t},${o.toFixed(2)},${adc}\n`;
+}
+this.dl(csv,'curve.csv','text/csv');
+}
+
+exportC(){
+let lut=[];
+for(let t=this.tmin;t<=this.tmax;t++){
+lut.push(Math.round(this.calc(t)*C.ADC/100));
+}
+const code=`/* CH32V003 Temperature Curve */
+#include <stdint.h>
+
+#define TEMP_MIN ${this.tmin}
+#define TEMP_MAX ${this.tmax}
+#define ADC_MAX ${C.ADC}
+
+const uint16_t lut[${lut.length}]=${JSON.stringify(lut).replace(/\[/g,'{').replace(/\]/g,'}')};
+
+uint16_t t2adc(float t){
+if(t<TEMP_MIN)t=TEMP_MIN;
+if(t>TEMP_MAX)t=TEMP_MAX;
+int i=(int)(t-TEMP_MIN);
+if(i<0)i=0;
+if(i>=${lut.length})i=${lut.length-1};
+return lut[i];
+}`;
+document.getElementById('code').textContent=code;
+this.dl(code,'curve.c','text/plain');
+}
+
+dl(c,f,m){
+const b=new Blob([c],{type:m});
+const u=URL.createObjectURL(b);
+const a=document.createElement('a');
+a.href=u;a.download=f;a.click();
+URL.revokeObjectURL(u);
+}
+}
+
+const app=new App();
+</script>
+</body>
+</html>
