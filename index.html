@@ -473,22 +473,73 @@ let lut=[];
 for(let t=this.tmin;t<=this.tmax;t++){
 lut.push(Math.round(this.calc(t)*C.ADC/100));
 }
+const len=lut.length;
 const code=`/* CH32V003 Temperature Curve */
 #include <stdint.h>
 
 #define TEMP_MIN ${this.tmin}
 #define TEMP_MAX ${this.tmax}
 #define ADC_MAX ${C.ADC}
+#define LUT_SIZE ${len}
 
-const uint16_t lut[${lut.length}]=${JSON.stringify(lut).replace(/\[/g,'{').replace(/\]/g,'}')};
+// Lookup table: index 0 = TEMP_MIN, index N = TEMP_MAX
+const uint16_t lut[LUT_SIZE]=${JSON.stringify(lut).replace(/\[/g,'{').replace(/\]/g,'}')};
 
+// Linear interpolation between LUT points
 uint16_t t2adc(float t){
-if(t<TEMP_MIN)t=TEMP_MIN;
-if(t>TEMP_MAX)t=TEMP_MAX;
-int i=(int)(t-TEMP_MIN);
-if(i<0)i=0;
-if(i>=${lut.length})i=${lut.length-1};
-return lut[i];
+if(t<TEMP_MIN)return lut[0];
+if(t>TEMP_MAX)return lut[LUT_SIZE-1];
+float idx=t-TEMP_MIN;
+int i=(int)idx;
+float f=idx-i;
+if(i>=LUT_SIZE-1)return lut[LUT_SIZE-1];
+return (uint16_t)(lut[i]*(1.0f-f)+lut[i+1]*f);
+}
+
+// Inverse: find temperature for given ADC value (binary search)
+float adc2t(uint16_t adc){
+if(adc>=lut[0])return TEMP_MIN;
+if(adc<=lut[LUT_SIZE-1])return TEMP_MAX;
+int lo=0,hi=LUT_SIZE-1;
+while(lo<hi-1){
+int mid=(lo+hi)/2;
+if(lut[mid]>adc)lo=mid;else hi=mid;
+}
+float f=(float)(adc-lut[lo])/(lut[hi]-lut[lo]);
+return TEMP_MIN+lo+f;
+}
+
+// Example usage with PWM output (CH32V003 has no DAC)
+#include <ch32v00x.h>
+
+void pwm_init(){
+RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC|RCC_APB2Periph_TIM1,ENABLE);
+GPIO_InitTypeDef GPIO_InitStruct={0};
+GPIO_InitStruct.GPIO_Pin=GPIO_Pin_4;
+GPIO_InitStruct.GPIO_Mode=GPIO_Mode_AF_PP;
+GPIO_InitStruct.GPIO_Speed=GPIO_Speed_50MHz;
+GPIO_Init(GPIOC,&GPIO_InitStruct);
+TIM_OCInitTypeDef TIM_OCInitStruct={0};
+TIM_OCInitStruct.TIM_OCMode=TIM_OCMode_PWM1;
+TIM_OCInitStruct.TIM_OutputState=TIM_OutputState_Enable;
+TIM_OC1Init(TIM1,&TIM_OCInitStruct);
+TIM_Cmd(TIM1,ENABLE);
+TIM_CtrlPWMOutputs(TIM1,ENABLE);
+}
+
+void set_output(uint16_t adc_val){
+TIM_SetCompare1(TIM1,adc_val);
+}
+
+int main(){
+SystemInit();
+pwm_init();
+while(1){
+float temp=25.0f;// Read from sensor
+uint16_t out=t2adc(temp);
+set_output(out);
+Delay_Ms(100);
+}
 }`;
 document.getElementById('code').textContent=code;
 this.dl(code,'curve.c','text/plain');
